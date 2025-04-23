@@ -1,25 +1,22 @@
-Final Project for CS 5470. This is a VPN that utilizes QUIC-like features to create a more reliable, secure connection.
+# Final Project for CS 5470. 
+This VPN utilizes QUIC-like features to create a more reliable, secure connection.
 
 
-Guide to installing picotls -
-Make sure cmake is installed : sudo apt install cmake
-Make sure library installer is installer : sudo apt install libssl-dev
+## Guide to installing picotls -
+**Make sure cmake is installed :** sudo apt install cmake
+**Make sure the library installer is installed:** sudo apt install libssl-dev
 
+**Run :** sudo apt update
+**You can also try this:** sudo apt install cmake build-essential git libssl-dev
 
-sudo apt update
-You can also try this: sudo apt install cmake build-essential git libssl-dev
-
-
+**Run the Following :**
 cd ~
-
-
 git clone --recursive https://github.com/h2o/picotls.git
 cd picotls
 cmake .
 make
 
-
-To compile client file: **change to the path you have for these files**
+[!Warning] To compile client file: **change to the path you have for these files**
 
 
 gcc -Wall \ -I/home/robotics/picotls/include \ /home/robotics/picotls/lib/picotls.c \ /home/robotics/picotls/lib/openssl.c \ /home/robotics/picotls/lib/hpke.c \ client.c \ -o client \ -lssl -lcrypto
