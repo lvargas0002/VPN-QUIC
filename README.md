@@ -16,7 +16,8 @@ cd picotls
 cmake .
 make
 
-[!Warning] To compile client file: **change to the path you have for these files**
+> [!IMPORTANT]
+> To compile client file: **change to the path you have for these files**
 
 
 gcc -Wall \ -I/home/robotics/picotls/include \ /home/robotics/picotls/lib/picotls.c \ /home/robotics/picotls/lib/openssl.c \ /home/robotics/picotls/lib/hpke.c \ client.c \ -o client \ -lssl -lcrypto
