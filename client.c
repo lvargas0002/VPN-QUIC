@@ -14,6 +14,11 @@
 #define PORT 8080
 #define BUFFER_SIZE 1024
 
+uint8_t key[32] = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+                   0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10,
+                   0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18,
+                   0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20};
+
 // TLS context configuration
 ptls_context_t tls_ctx = {.random_bytes = ptls_openssl_random_bytes,
                           .get_time = &ptls_get_time,
@@ -30,6 +35,7 @@ int allocate_client_stream_id() {
   pthread_mutex_unlock(&stream_id_mutex);
   return id;
 }
+
 int main() {
   int sock_fd;
   char server_ip_addr[] = "127.0.0.1";
@@ -70,7 +76,13 @@ int main() {
 
   // Set up AEAD encryption with key
   ptls_cipher_suite_t *suite = tls_ctx.cipher_suites[0];
-  uint8_t key[32] = {0};
+  if (!suite) {
+    fprintf(stderr, "Failed to get cipher suite\n");
+    ptls_free(tls);
+    close(sock_fd);
+    exit(EXIT_FAILURE);
+  }
+
   ptls_aead_context_t *aead_encryption =
       ptls_aead_new(suite->aead, suite->hash, 1, key, "key-label");
 
@@ -101,7 +113,7 @@ int main() {
   ssize_t sent = send(sock_fd, encrypted, encrypted_len, 0);
 
   if (sent < 0) {
-    perror("send failed");
+    perror("sendto failed");
   }
 
   ptls_aead_free(aead_encryption);

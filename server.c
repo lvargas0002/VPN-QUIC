@@ -23,6 +23,11 @@ ptls_context_t tls_ctx = {.random_bytes = ptls_openssl_random_bytes,
                           .get_time = &ptls_get_time,
                           .key_exchanges = ptls_openssl_key_exchanges,
                           .cipher_suites = ptls_openssl_cipher_suites};
+// Define encryption key - MUST match between client and server
+uint8_t key[32] = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+                   0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10,
+                   0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18,
+                   0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20};
 
 struct quic_packet {
   int stream_id;
@@ -57,8 +62,6 @@ int main() {
 
   printf("Server listening on port %d\n", PORT);
 
-  // AEAD setup for decryption
-  uint8_t key[32] = {0};
   ptls_context_t tls_ctx = {.random_bytes = ptls_openssl_cipher_suites,
                             .get_time = &ptls_get_time,
                             .key_exchanges = ptls_openssl_key_exchanges,
@@ -89,15 +92,11 @@ int main() {
     }
 
     uint8_t decrypted[BUFFER_SIZE];
-    size_t decrypted_len;
-
-    // error handling around decryption
-    if ((decrypted_len = ptls_aead_decrypt(aead_decryption, decrypted, buffer,
-                                           bytes, 0, NULL, 0)) == SIZE_MAX) {
-      printf("Decryption failed\n");
-      continue;
-    }
-
+    uint8_t aad[8] = {0};
+    uint64_t seq = 0;
+    size_t decrypted_len = ptls_aead_decrypt(
+        aead_decryption, decrypted, buffer + 10, bytes, seq, aad,
+        sizeof(aad)); // error handling around decryption
     //  debugging - delete later
     printf("Decrypted data (hex): ");
     for (size_t i = 0; i < decrypted_len; i++) {
@@ -126,9 +125,8 @@ int main() {
     packet.length = length;
     memcpy(packet.payload, decrypted + 2 * sizeof(int), length);
 
-    packet.payload[length] = '\0';
-
-    printf("Decrypted packet: Stream ID: %d, Length: %d, Payload: %s\n",
+    packet.payload[length] = '0';
+    printf("Received packet - Stream ID: %d, Length: %d, Payload: %s\n",
            packet.stream_id, packet.length, packet.payload);
   }
   ptls_aead_free(aead_decryption);
