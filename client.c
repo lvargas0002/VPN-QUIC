@@ -5,6 +5,7 @@
 #include <picotls/openssl.h> // OpenSSL backend integration
 #include <pthread.h>
 #include <signal.h> // <csignal> is part of the C++ standard library, use this instead
+#include <stddef.h>
 #include <stdio.h>      //Standard I/O functions like printf()
 #include <stdlib.h>     //Standard functions like exit()
 #include <string.h>     //String operations like memset() and strlen()
@@ -50,7 +51,9 @@ int main() {
     perror("Socket creation failed");
     exit(EXIT_FAILURE);
   }
+
   // Set up server address
+  memset(&server_addr, 0, sizeof(server_addr));
   server_addr.sin_family = AF_INET;
   server_addr.sin_port = htons(PORT);
 
@@ -96,25 +99,62 @@ int main() {
   int stream_id = allocate_client_stream_id();
   const char *message = "Hello";
   size_t message_len = strlen(message);
+  printf("Sending message '%s' on stream %d\n", message, stream_id);
 
   // Serialize packet: stream_id, length, payload
   uint8_t plain[BUFFER_SIZE];
+  memset(plain, 0, BUFFER_SIZE);
+
   size_t plain_len = 2 * sizeof(int) + message_len;
   memcpy(plain, &stream_id, sizeof(int));
-  memcpy(plain + sizeof(int), &message_len, sizeof(int));
+  int payload_len = message_len;
+  memcpy(plain + sizeof(int), &payload_len, sizeof(int));
   memcpy(plain + 2 * sizeof(int), message, message_len);
 
+  printf("Plain packet size: %zu bytes\n", plain_len);
+  printf("Plain packet structure: stream_id=%d, length=%d, message='%s'\n",
+         stream_id, payload_len, message);
+
   // Encrypt Message
-  uint8_t encrypted[BUFFER_SIZE];
+  // uint8_t encrypted[BUFFER_SIZE];
+  size_t tag_size = suite->aead->tag_size;
+  size_t encrypted_capacity = plain_len + tag_size;
+
+  uint8_t *encrypted = malloc(encrypted_capacity);
+
+  if (encrypted == NULL) {
+    perror("Memory allocation failed for encrypted buffer");
+    ptls_aead_free(aead_encryption);
+    ptls_free(tls);
+    close(sock_fd);
+    exit(EXIT_FAILURE);
+  }
+
+  memset(encrypted, 0, encrypted_capacity);
+
   size_t encrypted_len = ptls_aead_encrypt(aead_encryption, encrypted, plain,
                                            plain_len, 0, NULL, 0);
+
+  if (encrypted_len == 0) {
+    fprintf(stderr, "Encryption failed");
+    free(encrypted);
+    ptls_aead_free(aead_encryption);
+    ptls_free(tls);
+    close(sock_fd);
+    exit(EXIT_FAILURE);
+  }
 
   // Send encrypted packet
   ssize_t sent = send(sock_fd, encrypted, encrypted_len, 0);
 
   if (sent < 0) {
     perror("sendto failed");
+    free(encrypted);
+    ptls_aead_free(aead_encryption);
+    close(sock_fd);
+    exit(EXIT_FAILURE);
   }
+  printf("Sent %zd bytes to server\n", sent);
 
   ptls_aead_free(aead_encryption);
   ptls_free(tls);

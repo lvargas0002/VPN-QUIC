@@ -3,6 +3,7 @@
 #include <netinet/in.h> //Defines Internet address structures.
 #include <signal.h> // <csignal> is part of the C++ standard library, use this instead
 #include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>      //Standard I/O functions like printf()
 #include <stdlib.h>     //Standard functions like exit()
 #include <string.h>     //String operations like memset() and strlen()
@@ -49,6 +50,8 @@ int main() {
     exit(EXIT_FAILURE);
   }
 
+  memset(&address, 0, sizeof(address));
+
   // bind
   address.sin_family = AF_INET;
   address.sin_addr.s_addr = INADDR_ANY;
@@ -61,11 +64,6 @@ int main() {
   }
 
   printf("Server listening on port %d\n", PORT);
-
-  ptls_context_t tls_ctx = {.random_bytes = ptls_openssl_cipher_suites,
-                            .get_time = &ptls_get_time,
-                            .key_exchanges = ptls_openssl_key_exchanges,
-                            .cipher_suites = ptls_openssl_cipher_suites};
 
   ptls_cipher_suite_t *suite = ptls_openssl_cipher_suites[0];
   if (!suite) {
@@ -82,7 +80,12 @@ int main() {
     close(server_fd);
     exit(EXIT_FAILURE);
   }
+
+  uint64_t seq = 0;
+
   while (1) {
+    memset(buffer, 0, BUFFER_SIZE);
+
     int bytes = recvfrom(server_fd, buffer, BUFFER_SIZE, 0,
                          (struct sockaddr *)&client_addr, &addrlen);
 
@@ -91,22 +94,40 @@ int main() {
       continue;
     }
 
-    uint8_t decrypted[BUFFER_SIZE];
-    uint8_t aad[8] = {0};
-    uint64_t seq = 0;
+    printf("received %d bytes from client\n", bytes);
+    uint8_t *decrypted = malloc(BUFFER_SIZE);
+
+    if (decrypted == NULL) {
+      perror("Memory allocation failed for decrypted buffer");
+      continue;
+    }
+
+    // uint8_t decrypted[BUFFER_SIZE];
+    // uint8_t aad[8] = {0};
+    // uint64_t seq = 0;
     size_t decrypted_len = ptls_aead_decrypt(
-        aead_decryption, decrypted, buffer + 10, bytes, seq, aad,
-        sizeof(aad)); // error handling around decryption
-    //  debugging - delete later
-    printf("Decrypted data (hex): ");
-    for (size_t i = 0; i < decrypted_len; i++) {
-      printf("%02x ", decrypted[i]);
+        aead_decryption, decrypted, (uint8_t *)buffer, bytes, seq, NULL, 0);
+
+    if (decrypted_len == SIZE_MAX) {
+      fprintf(stderr, "Decryption failed (sequence: %lu)\n", seq);
+
+      //  debug, delete later
+      for (int i = 0; i < (bytes > 16 ? 16 : bytes); i++) {
+        printf("%02x ", (unsigned char)buffer[i]);
+      }
+      printf("\n");
+
+      free(decrypted);
+      continue;
     }
 
     printf("\n");
     // Check to see if length of decrypted data is less than expected
     if (decrypted_len < 2 * sizeof(int)) {
-      printf("Decryption failed\n");
+      printf("Decrypted length: %zu\n", decrypted_len); // Use %zu for size_t
+
+      printf("\nDecryption failed\n");
+      free(decrypted);
       continue;
     }
 
@@ -125,9 +146,12 @@ int main() {
     packet.length = length;
     memcpy(packet.payload, decrypted + 2 * sizeof(int), length);
 
-    packet.payload[length] = '0';
+    packet.payload[length] = '\0';
     printf("Received packet - Stream ID: %d, Length: %d, Payload: %s\n",
            packet.stream_id, packet.length, packet.payload);
+
+    free(decrypted);
+    seq++;
   }
   ptls_aead_free(aead_decryption);
   close(server_fd);
