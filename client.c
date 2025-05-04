@@ -13,7 +13,7 @@
 #include <unistd.h>     //POSIX OS functions like close()
 
 #define PORT 8080
-#define BUFFER_SIZE 1024
+#define BUFFER_SIZE 2048
 
 uint8_t key[32] = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
                    0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10,
@@ -96,10 +96,20 @@ int main() {
     exit(EXIT_FAILURE);
   }
 
+  printf("Client initialized with key: ");
+  for (int i = 0; i < 32; i++) {
+    printf("%02x ", key[i]);
+  }
+
   int stream_id = allocate_client_stream_id();
   const char *message = "Hello";
   size_t message_len = strlen(message);
   printf("Sending message '%s' on stream %d\n", message, stream_id);
+  ptls_buffer_t sendbuf;
+  ptls_buffer_init(&sendbuf, NULL, 0);
+
+  ptls_aead_encrypt(&sendbuf, aead_encryption, (uint8_t *)message, message_len,
+                    0, NULL, 0);
 
   // Serialize packet: stream_id, length, payload
   uint8_t plain[BUFFER_SIZE];
@@ -120,42 +130,44 @@ int main() {
   size_t tag_size = suite->aead->tag_size;
   size_t encrypted_capacity = plain_len + tag_size;
 
-  uint8_t *encrypted = malloc(encrypted_capacity);
+  // uint8_t *encrypted = malloc(encrypted_capacity);
 
-  if (encrypted == NULL) {
-    perror("Memory allocation failed for encrypted buffer");
-    ptls_aead_free(aead_encryption);
-    ptls_free(tls);
-    close(sock_fd);
-    exit(EXIT_FAILURE);
-  }
+  // if (encrypted == NULL) {
+  // perror("Memory allocation failed for encrypted buffer");
+  // ptls_aead_free(aead_encryption);
+  // ptls_free(tls);
+  // close(sock_fd);
+  // exit(EXIT_FAILURE);
+  //}
 
-  memset(encrypted, 0, encrypted_capacity);
+  //  memset(encrypted, 0, encrypted_capacity);
 
-  size_t encrypted_len = ptls_aead_encrypt(aead_encryption, encrypted, plain,
-                                           plain_len, 0, NULL, 0);
+  // size_t encrypted_len = ptls_aead_encrypt(aead_encryption, encrypted, plain,
+  // plain_len, 0, NULL, 0);
 
-  if (encrypted_len == 0) {
-    fprintf(stderr, "Encryption failed");
-    free(encrypted);
-    ptls_aead_free(aead_encryption);
-    ptls_free(tls);
-    close(sock_fd);
-    exit(EXIT_FAILURE);
-  }
+  // if (encrypted_len == 0) {
+  //  fprintf(stderr, "Encryption
+  //  failed");
+  // free(encrypted);
+  // ptls_aead_free(aead_encryption);
+  // ptls_free(tls);
+  // close(sock_fd);
+  // exit(EXIT_FAILURE);
+  // }
 
   // Send encrypted packet
-  ssize_t sent = send(sock_fd, encrypted, encrypted_len, 0);
+  ssize_t sent = send(sock_fd, sendbuf.base, sendbuf.off, 0);
 
   if (sent < 0) {
     perror("sendto failed");
-    free(encrypted);
+    ptls_buffer_dispose(&sendbuf);
     ptls_aead_free(aead_encryption);
     close(sock_fd);
     exit(EXIT_FAILURE);
   }
   printf("Sent %zd bytes to server\n", sent);
 
+  ptls_buffer_dispose(&sendbuf);
   ptls_aead_free(aead_encryption);
   ptls_free(tls);
   close(sock_fd);

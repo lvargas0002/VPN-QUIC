@@ -18,7 +18,7 @@
 // would like to specify the port number.
 
 #define PORT 8080
-#define BUFFER_SIZE 1024
+#define BUFFER_SIZE 3020
 
 ptls_context_t tls_ctx = {.random_bytes = ptls_openssl_random_bytes,
                           .get_time = &ptls_get_time,
@@ -81,6 +81,13 @@ int main() {
     exit(EXIT_FAILURE);
   }
 
+  printf("Server initialized with key: ");
+  for (int i = 0; i < 32; i++) {
+    printf("%02x ", key[i]);
+  }
+  printf("\n");
+  printf("Using cipher suite: %s\n", suite->aead->name);
+
   uint64_t seq = 0;
 
   while (1) {
@@ -95,39 +102,53 @@ int main() {
     }
 
     printf("received %d bytes from client\n", bytes);
+
+    ptls_buffer_t decbuf;
+    ptls_buffer_init(&decbuf, NULL, 0);
+
+    printf("Encrypted data (hex): ");
+    for (int i = 0; i < (bytes > 32 ? 32 : bytes); i++) {
+      printf("%02x ", (unsigned char)buffer[i]);
+    }
+    printf("\n");
+
     uint8_t *decrypted = malloc(BUFFER_SIZE);
 
     if (decrypted == NULL) {
       perror("Memory allocation failed for decrypted buffer");
       continue;
     }
+    //    memset(decrypted, 0, BUFFER_SIZE);
 
     // uint8_t decrypted[BUFFER_SIZE];
     // uint8_t aad[8] = {0};
     // uint64_t seq = 0;
-    size_t decrypted_len = ptls_aead_decrypt(
-        aead_decryption, decrypted, (uint8_t *)buffer, bytes, seq, NULL, 0);
+    //   size_t decrypted_len = ptls_aead_decrypt(
+    //      aead_decryption, decrypted, (uint8_t *)buffer, bytes, seq, NULL, 0);
 
-    if (decrypted_len == SIZE_MAX) {
-      fprintf(stderr, "Decryption failed (sequence: %lu)\n", seq);
+    // if (decrypted_len == SIZE_MAX) {
+    //      fprintf(stderr, "Decryption failed (sequence: %lu)\n", seq);
 
-      //  debug, delete later
-      for (int i = 0; i < (bytes > 16 ? 16 : bytes); i++) {
-        printf("%02x ", (unsigned char)buffer[i]);
-      }
-      printf("\n");
+    //  debug, delete later
+    //     for (int i = 0; i < (bytes > 16 ? 16 : bytes); i++) {
+    //      printf("%02x ", (unsigned char)buffer[i]);
+    //   }
+    //  printf("\n");
 
-      free(decrypted);
-      continue;
-    }
+    // free(decrypted);
+    // continue;
+    // }
+    ptls_aead_decrypt(&decbuf, aead_decryption, (uint8_t *)buffer, bytes, 0,
+                      NULL, 0);
+    seq++;
+    printf("Decrption successful! Decrypted %zu bytes\n", decbuf.off);
 
     printf("\n");
     // Check to see if length of decrypted data is less than expected
-    if (decrypted_len < 2 * sizeof(int)) {
-      printf("Decrypted length: %zu\n", decrypted_len); // Use %zu for size_t
-
+    if (decbuf.off < 2 * sizeof(int)) {
+      printf("Decrypted length: %zu\n", decbuf.off);
+      ptls_buffer_dispose(&decbuf);
       printf("\nDecryption failed\n");
-      free(decrypted);
       continue;
     }
 
@@ -136,22 +157,23 @@ int main() {
     memcpy(&length, decrypted + sizeof(int), sizeof(int));
 
     // Check for error or if expected decrypted message is less than expected
-    if (length < 0 || decrypted_len < 2 * sizeof(int) + (size_t)length) {
-      printf("Invalid payload length\n");
+    if (length < 0 || decbuf.off < 2 * sizeof(int) + (size_t)length) {
+      printf("Invalid payload length: %d (decrypted_len: %zu)\n", length,
+             decbuf.off);
+      ptls_buffer_dispose(&decbuf);
       continue;
     }
 
     struct quic_packet packet;
     packet.stream_id = stream_id;
     packet.length = length;
-    memcpy(packet.payload, decrypted + 2 * sizeof(int), length);
+    memcpy(packet.payload, decbuf.base + 2 * sizeof(int), length);
 
     packet.payload[length] = '\0';
     printf("Received packet - Stream ID: %d, Length: %d, Payload: %s\n",
            packet.stream_id, packet.length, packet.payload);
 
-    free(decrypted);
-    seq++;
+    ptls_buffer_dispose(&decbuf);
   }
   ptls_aead_free(aead_decryption);
   close(server_fd);
