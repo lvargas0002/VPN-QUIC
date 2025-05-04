@@ -4,6 +4,8 @@
 #include <cstdlib>
 #include <netinet/in.h> //Defines Internet address structures.
 #include <signal.h> // <csignal> is part of the C++ standard library, use this instead
+#include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>      //Standard I/O functions like printf()
 #include <stdlib.h>     //Standard functions like exit()
 #include <string.h>     //String operations like memset() and strlen()
@@ -23,6 +25,8 @@
 
 #define PORT 8080 // Port number
 #define BUFFER_SIZE 9999
+#define MAX_PACKET_SIZE 4096
+#define TUN_MTU 1500
 
 ptls_context_t tls_ctx = {.random_bytes = ptls_openssl_random_bytes,
                           .get_time = &ptls_get_time,
@@ -46,18 +50,21 @@ int open_tun_device(char *dev) {
   memset(&ifr, 0, sizeof(ifr));
 
   //  tunnel for ip packets, leaves protocol empty
-  ifr.ifr_flags = IFF_TUN | NO_PI;
+  ifr.ifr_flags = IFF_TUN | IFF_NO_PI;
 
   if (*dev) {
     strncpy(ifr.ifr_name, dev, IFNAMSIZ);
   }
 
-  if ((err = ioctl(fd, TUNSETIFF, (void *) &ifr) < 0) {
+  if ((err = ioctl(fd, TUNSETIFF, (void *)&ifr)) < 0) {
     perror("ioctl(UNSETIFF)");
     close(fd);
     return err;
   }
   printf("TUN device %s opened\n", ifr.ifr_name);
+
+  strcpy(dev, ifr.ifr_name);
+
   return fd;
 }
 
@@ -70,9 +77,15 @@ int main() {
     return EXIT_FAILURE;
   }
 
+  printf("TUN Device opened. Congifure with IP:\n");
+  printf(" sudo ip address add 10.8.0.1/24 dev %s\n", tun_device);
+  printf(" sudo ip link set dev %s up\n", tun_device);
+
   int server_fd, new_socket;
   struct sockaddr_in address, client_addr;
   char buffer[BUFFER_SIZE];
+  uint8_t tun_buffer[MAX_PACKET_SIZE];
+  uint8_t encrypted_bufffer[BUFFER_SIZE];
 
   socklen_t addrlen = sizeof(client_addr);
 
@@ -83,6 +96,14 @@ int main() {
     exit(EXIT_FAILURE);
   }
 
+  int opt = 1;
+  if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
+    perror("setsockopt(SO_REUSEADDR) failed");
+    close(tun_fd);
+    close(server_fd);
+    exit(EXIT_FAILURE);
+  }
+
   // bind
   address.sin_family = AF_INET;
   address.sin_addr.s_addr = INADDR_ANY;
@@ -90,6 +111,8 @@ int main() {
 
   if (bind(server_fd, (struct sockaddr *)&address, sizeof(address)) < 0) {
     perror("Bind Failed");
+    close(tun_fd);
+    close(server_fd);
     exit(EXIT_FAILURE);
   }
 
@@ -101,6 +124,8 @@ int main() {
   ptls_aead_context_t *aead_decryption =
       ptls_aead_new(suite->aead, suite->hash, 0, key, "key-label");
 
+  int have_client = 0;
+
   while (1) {
     // read from tun
     fd_set readfds;
@@ -109,48 +134,74 @@ int main() {
     FD_SET(server_fd, &readfds);
     int max_fd = tun_fd > server_fd ? tun_fd : server_fd;
 
-    int bytes = recvfrom(server_fd, buffer, BUFFER_SIZE, 0,
-                         (struct sockaddr *)&client_addr, &addrlen);
+    int ready_to_receive = select(max_fd + 1, &readfds, NULL, NULL, NULL);
 
-    if (bytes < 0) {
-      perror("receive failed");
-      continue;
+    if (ready_to_receive < 0) {
+      perror("select");
+      break;
     }
 
-    uint8_t decrypted[BUFFER_SIZE];
-    size_t decrypted_len = ptls_aead_decrypt(aead_decryption, decrypted, buffer,
-                                             bytes, 0, NULL, 0);
-    // Check to see if length of decrypted data is less than expected
-    if (decrypted_len == SIZE_MAX || decrypted_len < 2 * sizeof(int)) {
-      fprintf(stderr, "Invalid decryption failed, decrypted length: \n",
-              decrypted_len);
+    if (FD_ISSET(server_fd, &readfds)) {
 
-      continue;
+      int bytes = recvfrom(server_fd, buffer, BUFFER_SIZE, 0,
+                           (struct sockaddr *)&client_addr, &addrlen);
+
+      if (bytes < 0) {
+        perror("receive failed");
+        continue;
+      }
+
+      uint8_t decrypted[BUFFER_SIZE];
+      size_t decrypted_len = ptls_aead_decrypt(aead_decryption, decrypted,
+                                               buffer, bytes, 0, NULL, 0);
+      // Check to see if length of decrypted data is less than expected
+      if (decrypted_len == SIZE_MAX || decrypted_len < 2 * sizeof(int)) {
+        fprintf(stderr, "Invalid decryption failed, decrypted length: \n",
+                decrypted_len);
+
+        continue;
+      }
+
+      int stream_id, length;
+      memcpy(&stream_id, decrypted, sizeof(int));
+      memcpy(&length, decrypted + sizeof(int), sizeof(int));
+      // Check for error or if expected decrypted message is less than expected
+      if (length < 0 || decrypted_len < 2 * sizeof(int) + (size_t)length) {
+        printf("Invalid payload length\n");
+        continue;
+      }
+
+      // Allocate packet memory
+      struct quic_packet *packet = malloc(sizeof(struct quic_packet) + length);
+      if (!packet) {
+        perror("malloc failed");
+        continue;
+      }
+      packet->stream_id = stream_id;
+      packet->length = length;
+      memcpy(packet->payload, decrypted + 2 * sizeof(int), length);
+
+      uint8_t *payload = decrypted + 2 * sizeof(int);
+
+      //  write to the tun device
+      int bytes_written = write(tun_fd, payload, length);
+      if (bytes_written < 0) {
+        perror("Writing to tun device");
+        continue;
+      }
+
+      if (bytes_written != length) {
+        fprintf(stderr, "Incomplete write to tun device: %d/%d\n",
+                bytes_written, length);
+      } else {
+        printf("Wrote %d bytes to TUN device\n", bytes_written);
+      }
+
+      printf("Decrypted packet: Stream ID: %d, Length: %d, Payload: %s\n",
+             packet->stream_id, packet->length, packet->payload);
+      // Release allocated packet
+      free(packet);
     }
-
-    int stream_id, length;
-    memcpy(&stream_id, decrypted, sizeof(int));
-    memcpy(&length, decrypted + sizeof(int), sizeof(int));
-    // Check for error or if expected decrypted message is less than expected
-    if (length < 0 || decrypted_len < 2 * sizeof(int) + (size_t)length) {
-      printf("Invalid payload length\n");
-      continue;
-    }
-
-    // Allocate packet memory
-    struct quic_packet *packet = malloc(sizeof(struct quic_packet) + length);
-    if (!packet) {
-      perror("malloc failed");
-      continue;
-    }
-    packet->stream_id = stream_id;
-    packet->length = length;
-    memcpy(packet->payload, decrypted + 2 * sizeof(int), length);
-
-    printf("Decrypted packet: Stream ID: %d, Length: %d, Payload: %s\n",
-           packet->stream_id, packet->length, packet->payload);
-    // Release allocated packet
-    free(packet);
   }
   ptls_aead_free(aead_decryption);
   close(server_fd);
