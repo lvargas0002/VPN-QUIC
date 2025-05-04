@@ -1,7 +1,10 @@
 # compiler and flags
 CC = gcc
-CFLAGS = -I/usr/local/opt/openssl/include -I./picotls/include
-LDFLAGS = -L/usr/local/opt/openssl/lib -L./picotls -lssl -lcrypto -lpicotls-core -lpicotls-openssl
+CFLAGS = -Wall -I./picotls/include
+LDFLAGS = -lssl -lcrypto
+
+# PicoTLS sources (relatibe paths)
+PICOTLS_SRC = picotls/lib/picotls.c picotls/lib/openssl.c picotls/lib/hpke.c
 
 # source files
 CLIENT_SRC = client.c
@@ -11,11 +14,11 @@ SERVER_TARGET = server
 
 all: $(CLIENT_TARGET) $(SERVER_TARGET)
 
-$(CLIENT_TARGET): $(CLIENT_SRC)
-	$(CC) $(CLIENT_SRC) -o $(CLIENT_TARGET) $(CFLAGS) $(LDFLAGS)
+$(CLIENT_TARGET): $(CLIENT_SRC) $(PICOTLS_SRC)
+	$(CC) $(CFLAGS) $(CLIENT_SRC) $(PICOTLS_SRC) -o $(CLIENT_TARGET) $(LDFLAGS)
 
-$(SERVER_TARGET): $(SERVER_SRC)
-	$(CC) $(SERVER_SRC) -o $(SERVER_TARGET) $(CFLAGS) $(LDFLAGS)
+$(SERVER_TARGET): $(SERVER_SRC) $(PICOTLS_SRC)
+	$(CC) $(CFLAGS) $(SERVER_SRC) $(PICOTLS_SRC) -o $(SERVER_TARGET) $(LDFLAGS)
 
 clean:
 	rm -f $(CLIENT_TARGET) $(SERVER_TARGET)
