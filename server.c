@@ -15,7 +15,7 @@
 // would like to specify the port number.
 
 #define PORT 8080 // Port number
-#define BUFFER_SIZE 1024
+#define BUFFER_SIZE 9999
 
 ptls_context_t tls_ctx = {
 	.random_bytes = ptls_openssl_random_bytes,
