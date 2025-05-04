@@ -1,4 +1,5 @@
-#include <arpa/inet.h>       //Networking functions like inet_pton(), htons()
+#include <arpa/inet.h> //Networking functions like inet_pton(), htons()
+
 #include <netinet/in.h>      //Defines Internet address structures.
 #include <openssl/ssl.h>     // OpenSSL SSL functions
 #include <picotls.h>         // Core PicoTLS definitions
@@ -6,6 +7,7 @@
 #include <pthread.h>
 #include <signal.h> // <csignal> is part of the C++ standard library, use this instead
 #include <stddef.h>
+#include <stdint.h>
 #include <stdio.h>      //Standard I/O functions like printf()
 #include <stdlib.h>     //Standard functions like exit()
 #include <string.h>     //String operations like memset() and strlen()
@@ -105,11 +107,19 @@ int main() {
   const char *message = "Hello";
   size_t message_len = strlen(message);
   printf("Sending message '%s' on stream %d\n", message, stream_id);
+
   ptls_buffer_t sendbuf;
   ptls_buffer_init(&sendbuf, NULL, 0);
 
-  ptls_aead_encrypt(&sendbuf, aead_encryption, (uint8_t *)message, message_len,
-                    0, NULL, 0);
+  if (ptls_aead_encrypt(&sendbuf, aead_encryption, (const uint8_t *)message,
+                        message_len, 0, NULL, 0) == 0) {
+    fprintf(stderr, "Failed to encrypt message\n");
+    ptls_buffer_dispose(&sendbuf);
+    ptls_aead_free(aead_encryption);
+    ptls_free(tls);
+    close(sock_fd);
+    exit(EXIT_FAILURE);
+  }
 
   // Serialize packet: stream_id, length, payload
   uint8_t plain[BUFFER_SIZE];

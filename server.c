@@ -1,5 +1,4 @@
-#include <arpa/inet.h> //Networking functions like inet_pton(), htons()
-
+#include <arpa/inet.h>  //Networking functions like inet_pton(), htons()
 #include <netinet/in.h> //Defines Internet address structures.
 #include <signal.h> // <csignal> is part of the C++ standard library, use this instead
 #include <stddef.h>
@@ -138,17 +137,25 @@ int main() {
     // free(decrypted);
     // continue;
     // }
-    ptls_aead_decrypt(&decbuf, aead_decryption, (uint8_t *)buffer, bytes, 0,
-                      NULL, 0);
-    seq++;
-    printf("Decrption successful! Decrypted %zu bytes\n", decbuf.off);
+    size_t decrypted_packet = ptls_aead_decrypt(aead_decryption, decrypted,
+                                                buffer, bytes, 0, NULL, 0);
 
-    printf("\n");
+    if (decrypted_packet == SIZE_MAX) {
+      fprintf(stderr, "Decrption failed");
+      ptls_buffer_dispose(&decbuf);
+      free(decrypted);
+      continue;
+    }
+    seq++;
+    printf("Decrypted message: %.*s\n", (int)decbuf.off, (char *)decbuf.base);
+    printf("Decryption successful! Decrypted %zu bytes\n", decbuf.off);
+
     // Check to see if length of decrypted data is less than expected
     if (decbuf.off < 2 * sizeof(int)) {
       printf("Decrypted length: %zu\n", decbuf.off);
       ptls_buffer_dispose(&decbuf);
       printf("\nDecryption failed\n");
+      free(decrypted);
       continue;
     }
 
@@ -161,12 +168,21 @@ int main() {
       printf("Invalid payload length: %d (decrypted_len: %zu)\n", length,
              decbuf.off);
       ptls_buffer_dispose(&decbuf);
+      free(decrypted);
       continue;
     }
 
     struct quic_packet packet;
     packet.stream_id = stream_id;
     packet.length = length;
+
+    if (length + 1 > BUFFER_SIZE) {
+      fprintf(stderr, "Payload too large for buffer\n");
+      ptls_buffer_dispose(&decbuf);
+      free(decrypted);
+      continue;
+    }
+
     memcpy(packet.payload, decbuf.base + 2 * sizeof(int), length);
 
     packet.payload[length] = '\0';
