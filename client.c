@@ -9,6 +9,10 @@
 #include <string.h>     //String operations like memset() and strlen()
 #include <sys/socket.h> //Defines core socket functions and constants.
 #include <unistd.h>     //POSIX OS functions like close()
+#include <linux/if_tun.h>
+#include <net/if.h>
+#include <fcntl.h>
+#include <sys/ioctl.h>
 
 #define PORT 8080
 #define BUFFER_SIZE 2048
@@ -117,14 +121,28 @@ int main() {
   for (int i = 0; i < 32; i++) {
     printf("%02x", key[i]);
   }
+  fd_set readfds;
+  FD_ZERO(&readfds);
+  FD_SET(tun_fd, &readfds);
+  FD_SET(sock_fd, &readfds);
+  int max_fd = (tun_fd > sock_fd) ? tun_fd : sock_fd;
+  
+  int activity = select(max_fd + 1, &readfds, NULL, NULL, NULL);
+  if (activity < 0) {
+	  perror("select error");
+	  ptls_aead_free(aead);
+	  close(sock_fd);
+	  return EXIT_FAILURE;
+  }
+
 
   if (FD_ISSET(tun_fd, &readfds)) {
-    uint8_t tun_buffer[MAX_PACKET_SIZE];
+    uint8_t tun_buffer[BUFFER_SIZE];
     int bytes_read = read(tun_fd, tun_buffer, sizeof(tun_buffer));
 
     if (bytes_read < 0) {
       perror("Reading from tun error");
-      continue;
+      //continue;
     }
 
     if (bytes_read > 0) {
