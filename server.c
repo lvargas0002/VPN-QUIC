@@ -1,8 +1,6 @@
 #include <arpa/inet.h> //Networking functions like inet_pton(), htons()
-#include <cstdio>
 #include <fcntl.h>
 #include <linux/if_tun.h>
-#include <map>
 #include <net/if.h>
 #include <netinet/in.h>      //Defines Internet address structures.
 #include <openssl/ssl.h>     // OpenSSL SSL functions
@@ -84,7 +82,7 @@ int find_stream_index(int stream_id) {
 // Keep track of the stream ID for multiplexing
 int allocate_client_stream_id() {
   static int global_stream_id = 0;
-  pthread_mutex_lock(&stream_id_mutex);
+  pthread_mutex_lock(&stream_map_mutex);
 
   int id = ++global_stream_id;
 
