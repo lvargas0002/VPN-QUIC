@@ -1,21 +1,24 @@
-#include <arpa/inet.h>       //Networking functions like inet_pton(), htons()
+#include <arpa/inet.h> //Networking functions like inet_pton(), htons()
+
+#include <fcntl.h>
+#include <linux/if_tun.h>
+#include <net/if.h>
 #include <netinet/in.h>      //Defines Internet address structures.
 #include <openssl/ssl.h>     // OpenSSL SSL functions
 #include <picotls.h>         // Core PicoTLS definitions
 #include <picotls/openssl.h> // OpenSSL backend integration
+#include <pthread.h>
 #include <stdint.h>
-#include <stdio.h>      //Standard I/O functions like printf()
-#include <stdlib.h>     //Standard functions like exit()
-#include <string.h>     //String operations like memset() and strlen()
+#include <stdio.h>  //Standard I/O functions like printf()
+#include <stdlib.h> //Standard functions like exit()
+#include <string.h> //String operations like memset() and strlen()
+#include <sys/ioctl.h>
 #include <sys/socket.h> //Defines core socket functions and constants.
 #include <unistd.h>     //POSIX OS functions like close()
-#include <linux/if_tun.h>
-#include <net/if.h>
-#include <fcntl.h>
-#include <sys/ioctl.h>
 
 #define PORT 8080
 #define BUFFER_SIZE 2048
+#define MAX_STREAMS 1024
 
 uint8_t key[32] = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
                    0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10,
@@ -54,12 +57,107 @@ int open_tun_device(char *dev) {
   return fd;
 }
 
+typedef struct {
+  int stream_id;
+  int state;
+} stream_entry_t;
+
+stream_entry_t stream_map[MAX_STREAMS];
+int stream_count = 0;
+
+pthread_mutex_t stream_map_mutex = PTHREAD_MUTEX_INITIALIZER;
+
+int find_stream_index(int stream_id) {
+  for (int i = 0; i < stream_count; i++) {
+    if (stream_map[i].stream_id == stream_id) {
+      return i;
+    }
+
+    return -1;
+  }
+}
+
 // Keep track of the stream ID for multiplexing
 int allocate_client_stream_id() {
+  static int global_stream_id = 0;
   pthread_mutex_lock(&stream_id_mutex);
+
   int id = ++global_stream_id;
-  pthread_mutex_unlock(&stream_id_mutex);
+
+  if (stream_count >= MAX_STREAMS) {
+    fprintf(stderr, "Stream map is full");
+    pthread_mutex_unlock(&stream_map_mutex);
+    return -1;
+  }
+
+  stream_map[stream_count].stream_id = id;
+  stream_map[stream_count].state = 0;
+  stream_count++;
+  pthread_mutex_unlock(&stream_map_mutex);
+
   return id;
+}
+
+int get_or_add_stream(int stream_id) {
+  pthread_mutex_unlock(&stream_map_mutex);
+  int index = find_stream_index(stream_id);
+
+  if (index == -1) {
+    stream_map[stream_count].stream_id = stream_id;
+    stream_map[stream_count].state = 0;
+    index = stream_count;
+    stream_count++;
+  }
+
+  if (stream_count >= MAX_STREAMS) {
+    fprintf(stderr, "Stream map is full\n");
+    pthread_mutex_unlock(&stream_map_mutex);
+    return -1;
+  }
+  pthread_mutex_unlock(&stream_map_mutex);
+  return index;
+}
+
+void handle_tun_input(int tun_fd, int sock_fd, ptls_aead_context_t *aead,
+                      char *message) {
+  uint8_t tun_buffer[BUFFER_SIZE];
+  int bytes_read = read(tun_fd, tun_buffer, sizeof(tun_buffer));
+
+  if (bytes_read < 0) {
+    perror("Reading from error");
+    return;
+  }
+
+  int stream_id = allocate_client_stream_id();
+  size_t payload_length = bytes_read;
+
+  size_t message_len = strlen(message);
+
+  // Initialize packer: stream_id, length, payload
+  uint8_t plain[BUFFER_SIZE];
+  memcpy(plain, &stream_id, sizeof(int));
+  memcpy(plain + sizeof(int), &message_len, sizeof(int));
+  memcpy(plain + 2 * sizeof(int), message, message_len);
+  size_t plain_len = 2 * sizeof(int) + message_len;
+
+  // Encrypt message
+  uint8_t encrypted[BUFFER_SIZE];
+  size_t encrypted_len =
+      ptls_aead_encrypt(aead, encrypted, plain, plain_len, 0, NULL, 0);
+
+  if (encrypted_len == 0) {
+    fprintf(stderr, "Failed to encrypt message\n");
+    close(sock_fd);
+    exit(EXIT_FAILURE);
+  }
+
+  if (send(sock_fd, encrypted, encrypted_len, 0) < 0) {
+    perror("send failed");
+    ptls_aead_free(aead);
+    close(sock_fd);
+    exit(EXIT_FAILURE);
+  }
+  printf("\nClient sent encrypted message (%zu bytes)\n", encrypted_len);
 }
 
 int main() {
@@ -126,15 +224,14 @@ int main() {
   FD_SET(tun_fd, &readfds);
   FD_SET(sock_fd, &readfds);
   int max_fd = (tun_fd > sock_fd) ? tun_fd : sock_fd;
-  
+
   int activity = select(max_fd + 1, &readfds, NULL, NULL, NULL);
   if (activity < 0) {
-	  perror("select error");
-	  ptls_aead_free(aead);
-	  close(sock_fd);
-	  return EXIT_FAILURE;
+    perror("select error");
+    ptls_aead_free(aead);
+    close(sock_fd);
+    return EXIT_FAILURE;
   }
-
 
   if (FD_ISSET(tun_fd, &readfds)) {
     uint8_t tun_buffer[BUFFER_SIZE];
@@ -142,40 +239,13 @@ int main() {
 
     if (bytes_read < 0) {
       perror("Reading from tun error");
-      //continue;
+      // continue;
     }
 
     if (bytes_read > 0) {
       printf("Read %d bytes from TUN\n", bytes_read);
 
-      int stream_id = allocate_client_stream_id();
-      const char *message = "Hello";
-      size_t message_len = strlen(message);
-
-      // Initialize packer: stream_id, length, payload
-      uint8_t plain[BUFFER_SIZE];
-      memcpy(plain, &stream_id, sizeof(int));
-      memcpy(plain + sizeof(int), &message_len, sizeof(int));
-      memcpy(plain + 2 * sizeof(int), message, message_len);
-      size_t plain_len = 2 * sizeof(int) + message_len;
-
-      // Encrypt message
-      uint8_t encrypted[BUFFER_SIZE];
-      size_t encrypted_len =
-          ptls_aead_encrypt(aead, encrypted, plain, plain_len, 0, NULL, 0);
-      if (encrypted_len == 0) {
-        fprintf(stderr, "Failed to encrypt message\n");
-        close(sock_fd);
-        exit(EXIT_FAILURE);
-      }
-      // send encrypted packet
-      if (send(sock_fd, encrypted, encrypted_len, 0) < 0) {
-        perror("send failed");
-        ptls_aead_free(aead);
-        close(sock_fd);
-        exit(EXIT_FAILURE);
-      }
-      printf("\nClient sent encrypted message (%zu bytes)\n", encrypted_len);
+      handle_tun_input(tun_fd, sock_fd, aead, "hello");
     }
   }
 
