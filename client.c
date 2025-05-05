@@ -20,7 +20,6 @@
 #define BUFFER_SIZE 2048
 #define MAX_STREAMS 1024
 
-// Global variables
 uint8_t key[32] = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
                    0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10,
                    0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18,
@@ -42,12 +41,6 @@ typedef struct {
 } client_stream_t;
 
 static client_stream_t active_streams[MAX_STREAMS];
-
-// Function prototypes
-int open_tun_device(char *dev);
-int allocate_client_stream_id();
-void register_stream(int stream_id);
-bool is_stream_active(int stream_id);
 
 int open_tun_device(char *dev) {
     struct ifreq ifr;
@@ -178,9 +171,9 @@ int main(int argc, char *argv[]) {
     
     // Create AEAD contexts for both directions
     ptls_aead_context_t *encrypt_aead = 
-        ptls_aead_new(suite->aead, suite->hash, 1, key, NULL);
+        ptls_aead_new(suite->aead, suite->hash, 1, key, "key-label");
     ptls_aead_context_t *decrypt_aead = 
-        ptls_aead_new(suite->aead, suite->hash, 0, key, NULL);
+        ptls_aead_new(suite->aead, suite->hash, 0, key, "key-label");
         
     if (encrypt_aead == NULL || decrypt_aead == NULL) {
         fprintf(stderr, "Failed to create AEAD contexts");
@@ -226,7 +219,6 @@ int main(int argc, char *argv[]) {
             last_cleanup = now;
         }
 
-        // Handle packets from TUN device (outgoing traffic)
         if (FD_ISSET(tun_fd, &readfds)) {
             uint8_t tun_buffer[BUFFER_SIZE];
             int bytes_read = read(tun_fd, tun_buffer, sizeof(tun_buffer));
@@ -247,7 +239,6 @@ int main(int argc, char *argv[]) {
             memcpy(plain + 2 * sizeof(int), tun_buffer, bytes_read);
             size_t plain_len = 2 * sizeof(int) + bytes_read;
 
-            // Encrypt with unique nonce per packet
             uint8_t encrypted[BUFFER_SIZE];
             size_t encrypted_len = ptls_aead_encrypt(
                 encrypt_aead, encrypted, plain, plain_len, outgoing_packet_number++, NULL, 0);
@@ -266,7 +257,7 @@ int main(int argc, char *argv[]) {
                   stream_id, bytes_read);
         }
 
-        // Handle packets from socket (incoming traffic from server)
+        // Handle packets from socket
         if (FD_ISSET(sock_fd, &readfds)) {
             uint8_t buffer[BUFFER_SIZE];
             int bytes_received = recv(sock_fd, buffer, sizeof(buffer), 0);
@@ -304,10 +295,8 @@ int main(int argc, char *argv[]) {
                 printf("Received server response on stream %d | Payload length: %d\n", 
                       stream_id, length);
                 
-                // Check if this is a response to one of our streams
                 if (!is_stream_active(stream_id)) {
                     fprintf(stderr, "Warning: Received data for unknown stream ID: %d\n", stream_id);
-                    // We'll still process it
                 }
                 
                 // Extract and write the payload to TUN
