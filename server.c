@@ -9,6 +9,10 @@
 #include <string.h>     //String operations like memset() and strlen()
 #include <sys/socket.h> //Defines core socket functions and constants.
 #include <unistd.h>     //POSIX OS functions like close()
+#include <linux/if_tun.h>
+#include <net/if.h>
+#include <fcntl.h>
+#include <sys/ioctl.h>
 
 #define PORT 8080 // Port number
 #define BUFFER_SIZE 2048
@@ -180,7 +184,7 @@ int main() {
       memcpy(packet.payload, decrypted + 2 * sizeof(int), length);
       packet.payload[length] = '\0';
 
-      int bytes_written = write(tun_fd, payload, length);
+      int bytes_written = write(tun_fd, packet.payload, length);
 
       if (bytes_written != length) {
         fprintf(stderr, "Incomplete write to tun device: %d/%d\n",
