@@ -4,34 +4,38 @@ This VPN utilizes QUIC-like features to create a more reliable, secure connectio
 
 ## Guide to installing picotls -
 
-**Make sure cmake is installed :** sudo apt install cmake
-**Make sure the library installer is installed:** sudo apt install libssl-dev
-
-**Run :** sudo apt update
-**You can also try this:** sudo apt install cmake build-essential git libssl-dev
-
-**Run the Following :**
+**Make sure cmake is installed :** 
+```bash
+sudo apt install cmake
+```
+**Make sure the library installer is installed:**
+```bash
+sudo apt install libssl-dev
+```
+**Run :**
+```bash
+sudo apt update
+```
+**You can also try this:**
+```bash
+sudo apt install cmake build-essential git libssl-dev
+```
+**Clone PicoTLS :**
+```bash
 cd ~
 git clone --recursive https://github.com/h2o/picotls.git
 cd picotls
 cmake .
 make
-
-> [!IMPORTANT]
-> To compile client file: **change to the path you have for these files**
-
-gcc -Wall \ -I/home/robotics/picotls/include \ /home/robotics/picotls/lib/picotls.c \ /home/robotics/picotls/lib/openssl.c \ /home/robotics/picotls/lib/hpke.c \ client.c \ -o client \ -lssl -lcrypto
-
-**If using Geany:**
-Drop down Build and select Set Build Commands.
-Change compile to: gcc -Wall -I/home/robotics/picotls/include -c "%f"
-Change Build to: gcc -Wall \ -I/home/robotics/picotls/include \ /home/robotics/picotls/lib/picotls.c \ /home/robotics/picotls/lib/openssl.c \ /home/robotics/picotls/lib/hpke.c \ "%f" \ -o "%e" \ -lssl -lcrypto
-
+```
 ### To include in file:
 
 #include <picotls.h> // Core PicoTLS definitions
 #include <picotls/openssl.h> // OpenSSL backend integration
 #include <openssl/ssl.h> // OpenSSL SSL functions
+
+### Makefile:
+To build code for server and client use the makefile. It contains a path to the required libraries for PicoTLS.
 
 ## Installing OpenVPN
 
@@ -89,4 +93,12 @@ Once tunnel is running, you can do a sanity check by pinging the server from the
 
 ```bash
 ping 10.8.0.1
+```
+### Closing Server Connection
+
+Once te server has stopped if you wish to run the server again it's important to restart as it can help prevent errors and conflicts.
+
+```bash
+sudo ip link set tun0 down
+sudo ip tuntap del dev tun0 mode tun
 ```
