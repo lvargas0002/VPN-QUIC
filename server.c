@@ -150,8 +150,8 @@ int main() {
 
     // Initialize the picotls AEAD contexts
     ptls_cipher_suite_t *suite = ptls_openssl_cipher_suites[0];
-    ptls_aead_context_t *decrypt_aead = ptls_aead_new(suite->aead, suite->hash, 0, key, NULL);
-    ptls_aead_context_t *encrypt_aead = ptls_aead_new(suite->aead, suite->hash, 1, key, NULL);
+    ptls_aead_context_t *decrypt_aead = ptls_aead_new(suite->aead, suite->hash, 0, key, "key-label");
+    ptls_aead_context_t *encrypt_aead = ptls_aead_new(suite->aead, suite->hash, 1, key, "key-label");
 
     if (!decrypt_aead || !encrypt_aead) {
         fprintf(stderr, "Failed to initialize AEAD contexts\n");
@@ -181,8 +181,6 @@ int main() {
             continue;
         }
 
-        // Handle incoming UDP packets from clients
-        // Handle incoming UDP packets from clients
 if (FD_ISSET(sock, &fds)) {
     struct sockaddr_in client;
     socklen_t clen = sizeof(client);
@@ -196,7 +194,8 @@ if (FD_ISSET(sock, &fds)) {
 
     // Try initial decryption using a shared packet number (before registering stream)
     uint64_t temp_packet_number = 1000;
-    size_t dec_len = ptls_aead_decrypt(decrypt_aead, decrypted, buf, len, temp_packet_number, NULL, 0);
+    size_t dec_len = ptls_aead_decrypt(
+        decrypt_aead, decrypted, buf, len, temp_packet_number, NULL, 0);
 
     if (dec_len == SIZE_MAX) {
         fprintf(stderr, "Initial decryption failed for client %s:%d\n",
@@ -219,7 +218,7 @@ if (FD_ISSET(sock, &fds)) {
         continue;
     }
 
-    // Register the stream using the known stream id
+    // Register the stream using the known stream_id
     register_stream(stream_id, &client, clen);
     stream_state_t *stream = find_stream_by_addr(&client);
     if (!stream) {
@@ -240,53 +239,63 @@ if (FD_ISSET(sock, &fds)) {
         perror("Writing to TUN");
     }
 }
-    // Handle outgoing packets from TUN device
-    if (FD_ISSET(tun_fd, &fds)) {
-        uint8_t buffer[BUFFER_SIZE], encrypted[BUFFER_SIZE];
-        ssize_t len = read(tun_fd, buffer, BUFFER_SIZE);
+        if (FD_ISSET(tun_fd, &fds)) {
+            uint8_t buffer[BUFFER_SIZE], encrypted[BUFFER_SIZE];
+            ssize_t len = read(tun_fd, buffer, BUFFER_SIZE);
             
-        if (len <= 0) {
-            perror("Reading from TUN");
-        }
-            
-        if (len < 20) {
-            fprintf(stderr, "Packet too short for IP\n");
-        }
-        pthread_mutex_lock(&streams_mutex);
-        for (int i = 0; i < MAX_STREAMS; i++) {
-            if (!streams[i].active) continue;
-            
-            // Prepare packet header (stream_id + payload_length)
-            uint8_t packet[BUFFER_SIZE];
-            int stream_id = streams[i].stream_id;
-            int payload_len = len;
-            
-            memcpy(packet, &stream_id, sizeof(int));
-            memcpy(packet + sizeof(int), &payload_len, sizeof(int));
-            memcpy(packet + 2 * sizeof(int), buffer, len);
-            
-            size_t total_len = 2 * sizeof(int) + len;
-            size_t enc_len = ptls_aead_encrypt(encrypt_aead, encrypted, packet, total_len, streams[i].outgoing_packet_number++, NULL, 0);
-            
-            if (enc_len == SIZE_MAX) {
-                fprintf(stderr, "Encryption failed for stream %d\n", stream_id);
+            if (len <= 0) {
+                perror("Reading from TUN");
                 continue;
             }
-            ssize_t sent = sendto(sock, encrypted, enc_len, 0, (struct sockaddr *)&streams[i].client_addr, streams[i].addr_len);
             
-            if (sent != enc_len) {
-                perror("sendto");
+            if (len < 20) {
+                fprintf(stderr, "Packet too short for IP\n");
+                continue;
             }
-            else {
-                inet_ntoa(streams[i].client_addr.sin_addr), ntohs(streams[i].client_addr.sin_port), stream_id, (int)len);
+            
+            pthread_mutex_lock(&streams_mutex);
+            for (int i = 0; i < MAX_STREAMS; i++) {
+                if (!streams[i].active) continue;
+                
+                // Prepare packet header (stream_id + payload_length)
+                uint8_t packet[BUFFER_SIZE];
+                int stream_id = streams[i].stream_id;
+                int payload_len = len;
+                
+                memcpy(packet, &stream_id, sizeof(int));
+                memcpy(packet + sizeof(int), &payload_len, sizeof(int));
+                memcpy(packet + 2 * sizeof(int), buffer, len);
+                
+                size_t total_len = 2 * sizeof(int) + len;
+                size_t enc_len = ptls_aead_encrypt(encrypt_aead, encrypted, packet, total_len,
+                                                 streams[i].outgoing_packet_number++, NULL, 0);
+                
+                if (enc_len == SIZE_MAX) {
+                    fprintf(stderr, "Encryption failed for stream %d\n", stream_id);
+                    continue;
+                }
+                
+                ssize_t sent = sendto(sock, encrypted, enc_len, 0,
+                                   (struct sockaddr *)&streams[i].client_addr,
+                                   streams[i].addr_len);
+                
+                if (sent != enc_len) {
+                    perror("sendto");
+                } else {
+                    printf("Sent packet to %s:%d (stream %d, %d bytes)\n",
+                           inet_ntoa(streams[i].client_addr.sin_addr),
+                           ntohs(streams[i].client_addr.sin_port),
+                           stream_id, (int)len);
+                }
             }
+            pthread_mutex_unlock(&streams_mutex);
         }
-        pthread_mutex_unlock(&streams_mutex);
     }
-    }
+    
     ptls_aead_free(encrypt_aead);
     ptls_aead_free(decrypt_aead);
     close(sock);
     close(tun_fd);
+    
     return 0;
 }
