@@ -180,6 +180,8 @@ int main() {
       memcpy(packet.payload, decrypted + 2 * sizeof(int), length);
       packet.payload[length] = '\0';
 
+      int bytes_written = write(tun_fd, payload, length);
+
       if (bytes_written != length) {
         fprintf(stderr, "Incomplete write to tun device: %d/%d\n",
                 bytes_written, length);
