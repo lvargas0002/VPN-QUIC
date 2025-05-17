@@ -264,13 +264,15 @@ int main() {
                 memcpy(packet + 2 * sizeof(int), buffer, len);
                 
                 size_t total_len = 2 * sizeof(int) + len;
+                // Encrypt packet
                 size_t enc_len = ptls_aead_encrypt(encrypt_aead, encrypted, packet, total_len, streams[i].outgoing_packet_number++, NULL, 0);
                 
                 if (enc_len == SIZE_MAX) {
                     fprintf(stderr, "Encryption failed for stream %d\n", stream_id);
                     continue;
                 }
-                
+
+                // Reply to specific stream
                 ssize_t sent = sendto(sock, encrypted, enc_len, 0, (struct sockaddr *)&streams[i].client_addr, streams[i].addr_len);
                 
                 if (sent != enc_len) {
