@@ -68,8 +68,8 @@ sudo make install
 Run the following commands to create and configure the TUN device:
 
 ```bash
-sudo ip link add dev tun0 type tun
-sudo ip address add 10.8.0.1/24 dev tun0
+sudo ip tuntap add dev tun0 mode tun
+sudo ip addr add 10.8.0.1/24 dev tun0
 sudo ip link set dev tun0 up
 ```
 
